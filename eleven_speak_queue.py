@@ -46,6 +46,13 @@ INTERNAL = os.getenv("CLAUDE_TTS_INTERNAL", "") == "1"
 # Optional: disable playback (still generates audio)
 PLAY_ENABLED = os.getenv("CLAUDE_TTS_PLAY", "1") not in ("0", "false", "False", "no", "NO")
 
+# Playback speed (local player). 1.0 = normal, 2.0 = 2x, etc.
+try:
+    PLAYBACK_SPEED = float(os.getenv("CLAUDE_TTS_SPEED", "1.0"))
+except ValueError:
+    PLAYBACK_SPEED = 2.0
+PLAYBACK_SPEED = max(0.5, min(PLAYBACK_SPEED, 4.0))
+
 SPOOL_DIR = Path.home() / ".claude" / "tts_queue"
 JOBS_DIR = SPOOL_DIR / "jobs"
 AUDIO_DIR = SPOOL_DIR / "audio"
@@ -215,25 +222,28 @@ def elevenlabs_tts(text: str, voice_id: str, out_path: Path):
 
 def pick_player_cmd(audio_path: Path):
     sysname = platform.system()
+    s = PLAYBACK_SPEED
+
     if sysname == "Darwin" and shutil.which("afplay"):
-        return ["afplay", str(audio_path)]
+        return ["afplay", "--rate", str(s), str(audio_path)]
+
     if sysname == "Linux":
-        for cmd in ("ffplay", "mpv", "mpg123", "vlc", "play"):
+        if shutil.which("ffplay"):
+            return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-af", f"atempo={s}", str(audio_path)]
+        if shutil.which("mpv"):
+            return ["mpv", "--no-video", "--really-quiet", f"--speed={s}", str(audio_path)]
+        for cmd in ("mpg123", "vlc", "play"):
             if shutil.which(cmd):
-                if cmd == "ffplay":
-                    return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(audio_path)]
                 if cmd == "vlc":
                     return ["vlc", "--intf", "dummy", "--play-and-exit", str(audio_path)]
-                if cmd == "mpv":
-                    return ["mpv", "--no-video", "--really-quiet", str(audio_path)]
                 return [cmd, str(audio_path)]
+
     if sysname == "Windows":
-        for cmd in ("ffplay", "mpv"):
-            if shutil.which(cmd):
-                if cmd == "ffplay":
-                    return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(audio_path)]
-                return ["mpv", "--no-video", "--really-quiet", str(audio_path)]
-        return None
+        if shutil.which("ffplay"):
+            return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-af", f"atempo={s}", str(audio_path)]
+        if shutil.which("mpv"):
+            return ["mpv", "--no-video", "--really-quiet", f"--speed={s}", str(audio_path)]
+
     return None
 
 def play_audio(audio_path: Path):
