@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Code TTS Hook - Architecture Flow</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, system-ui, sans-serif;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+        h1 { text-align: center; margin-bottom: 8px; }
+        .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
+        .diagram-container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            margin-bottom: 24px;
+        }
+        .diagram-container h2 {
+            margin-top: 0;
+            font-size: 18px;
+            color: #555;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        .key-points {
+            background: white;
+            border-radius: 8px;
+            padding: 20px 28px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .key-points h2 { margin-top: 0; }
+        .key-points h3 { color: #555; margin-bottom: 6px; }
+        .key-points ul { margin-top: 4px; }
+        .key-points li { margin-bottom: 4px; line-height: 1.5; }
+        code {
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 13px;
+        }
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        @media (max-width: 800px) {
+            .two-col { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Claude Code TTS Hook</h1>
+    <p class="subtitle">ElevenLabs v3 &middot; Stop Hook &middot; Global Queue &middot; Optional Summarization</p>
+
+    <!-- ==================== MAIN FLOW ==================== -->
+    <div class="diagram-container">
+        <h2>Main Flow (Sequence)</h2>
+        <div class="mermaid">
+sequenceDiagram
+    participant CC as Claude Code
+    participant Hook as Stop Hook<br/>(eleven_speak_queue.py)
+    participant Claude as claude -p<br/>(Haiku Summarizer)
+    participant EL as ElevenLabs API<br/>(eleven_v3)
+    participant Speaker as Audio Player<br/>(afplay / mpv)
+
+    Note over CC,Hook: Phase 1 &mdash; Hook Trigger
+    CC->>Hook: Stop event fires (stdin JSON)
+    Hook->>Hook: Read last_assistant_message
+    Hook->>Hook: Guard checks (enabled? internal? stop_hook_active?)
+
+    Note over Hook: Phase 2 &mdash; Text Preparation
+    Hook->>Hook: sanitize_for_summary_input()<br/>Strip code fences, markdown, truncate to 4000 chars
+
+    alt CLAUDE_TTS_SUMMARIZE >= 1
+        Note over Hook,Claude: Phase 3a &mdash; Summarization
+        Hook->>Claude: claude -p "Summarize in N sentences..."<br/>--model haiku --tools "" --max-turns 1
+        Note right of Claude: CLAUDE_TTS_INTERNAL=1<br/>(recursion guard)
+        Claude-->>Hook: N-sentence prose summary (JSON)
+        Hook->>Hook: sanitize_for_speech(summary)
+    else CLAUDE_TTS_SUMMARIZE = 0
+        Note over Hook: Phase 3b &mdash; Direct Speech
+        Hook->>Hook: sanitize_for_speech(cleaned text)<br/>Truncate to 900 chars
+    end
+
+    Note over Hook,Speaker: Phase 4 &mdash; Queue + Playback
+    Hook->>Hook: Write job JSON to ~/.claude/tts_queue/jobs/
+    Hook->>Hook: Acquire FileLock (queue.lock)
+    loop Drain all jobs in sorted order
+        Hook->>Hook: Read job from spool
+        Hook->>EL: POST /v1/text-to-speech/{voice_id}<br/>model_id: eleven_v3
+        EL-->>Hook: MP3 audio bytes
+        Hook->>Speaker: Play audio (blocking)
+        Speaker-->>Hook: Playback complete
+        Hook->>Hook: Delete job + audio file
+    end
+    Hook->>Hook: Release FileLock
+        </div>
+    </div>
+
+    <!-- ==================== GUARD CHECKS ==================== -->
+    <div class="diagram-container">
+        <h2>Guard &amp; Early-Exit Logic</h2>
+        <div class="mermaid">
+flowchart TD
+    Start([Stop hook fires]) --> A{CLAUDE_TTS<br/>enabled?}
+    A -->|No| Exit([Exit 0 — silent])
+    A -->|Yes| B{CLAUDE_TTS_INTERNAL<br/>= 1?}
+    B -->|Yes| Exit
+    B -->|No| C{hook_event_name<br/>== Stop?}
+    C -->|No| Exit
+    C -->|Yes| D{stop_hook_active<br/>== true?}
+    D -->|Yes| Exit
+    D -->|No| E{last_assistant_message<br/>non-empty?}
+    E -->|No| Exit
+    E -->|Yes| F{API_KEY and<br/>VOICE_ID set?}
+    F -->|No| Exit
+    F -->|Yes| G[Proceed to sanitize + enqueue]
+
+    style Exit fill:#f9f9f9,stroke:#ccc,color:#999
+    style G fill:#d4edda,stroke:#28a745,color:#155724
+        </div>
+    </div>
+
+    <!-- ==================== MULTI-SESSION ==================== -->
+    <div class="diagram-container">
+        <h2>Multi-Session Queue Serialization</h2>
+        <div class="mermaid">
+sequenceDiagram
+    participant S1 as Session A
+    participant S2 as Session B
+    participant S3 as Session C
+    participant Q as Job Spool<br/>(~/.claude/tts_queue/jobs/)
+    participant Lock as FileLock<br/>(queue.lock)
+    participant Spk as Speaker
+
+    Note over S1,Spk: All sessions write jobs concurrently, but only one plays at a time
+
+    S1->>Q: Write job_1.json
+    S2->>Q: Write job_2.json
+    S1->>Lock: Acquire lock
+    Note right of Lock: Session A holds lock
+
+    S1->>Spk: Play job_1 audio
+    S3->>Q: Write job_3.json
+    S2->>Lock: Block (waiting)
+    Spk-->>S1: Done
+    S1->>Spk: Play job_2 audio
+    Spk-->>S1: Done
+    S1->>Spk: Play job_3 audio
+    Spk-->>S1: Done
+    S1->>Lock: Release lock
+
+    Note over S2,Lock: Session B acquires lock, finds no jobs, releases
+    S2->>Lock: Acquire lock
+    S2->>Lock: Release lock (queue empty)
+        </div>
+    </div>
+
+    <!-- ==================== ERROR HANDLING ==================== -->
+    <div class="diagram-container">
+        <h2>Error Handling</h2>
+        <div class="mermaid">
+flowchart LR
+    Job[Read job from spool] --> TTS[Call ElevenLabs API]
+    TTS -->|Success| Play[Play audio]
+    Play --> Cleanup[Delete job + audio]
+    TTS -->|Exception| Failed[move_to_failed]
+    Play -->|Exception| Failed
+    Failed --> WriteErr[Write to failed/ dir<br/>with error reason + timestamp]
+    WriteErr --> Next[Continue to next job]
+    Cleanup --> Next
+
+    style Failed fill:#f8d7da,stroke:#dc3545,color:#721c24
+    style Cleanup fill:#d4edda,stroke:#28a745,color:#155724
+        </div>
+    </div>
+
+    <!-- ==================== KEY POINTS ==================== -->
+    <div class="key-points">
+        <h2>Key Points</h2>
+
+        <div class="two-col">
+            <div>
+                <h3>File Locations</h3>
+                <ul>
+                    <li><code>~/.claude/hooks/eleven_speak_queue.py</code> — Hook script</li>
+                    <li><code>~/.claude/settings.json</code> — Env vars + hook config</li>
+                    <li><code>~/.claude/tts_queue/jobs/</code> — Pending job spool</li>
+                    <li><code>~/.claude/tts_queue/audio/</code> — Temp MP3 files</li>
+                    <li><code>~/.claude/tts_queue/failed/</code> — Failed jobs with errors</li>
+                    <li><code>~/.claude/tts_queue/queue.lock</code> — Global playback lock</li>
+                </ul>
+
+                <h3>Recursion Prevention</h3>
+                <ul>
+                    <li>When the hook calls <code>claude -p</code> for summarization, it sets <code>CLAUDE_TTS_INTERNAL=1</code></li>
+                    <li>The nested Claude process fires its own Stop hook, but the script exits immediately when it sees that env var</li>
+                    <li>Additionally, <code>stop_hook_active</code> from Claude Code prevents re-entrant hook loops</li>
+                </ul>
+            </div>
+
+            <div>
+                <h3>Queue Design</h3>
+                <ul>
+                    <li>Jobs are written to the spool directory <strong>before</strong> acquiring the lock</li>
+                    <li>Summarization happens <strong>before</strong> enqueueing (outside the lock) to avoid holding it during slow API calls</li>
+                    <li>The lock holder drains <strong>all</strong> pending jobs (including ones from other sessions) before releasing</li>
+                    <li>Failed jobs are moved aside so the queue never gets stuck</li>
+                </ul>
+
+                <h3>Text Pipeline</h3>
+                <ul>
+                    <li><strong>Raw message</strong> &rarr; remove code fences, markdown &rarr; truncate to 4000 chars (summary input)</li>
+                    <li>If summarizing: &rarr; <code>claude -p</code> Haiku &rarr; N-sentence prose</li>
+                    <li>Final speech text &rarr; sanitize again &rarr; truncate to 900 chars &rarr; send to ElevenLabs</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            sequence: {
+                diagramMarginX: 50,
+                diagramMarginY: 10,
+                actorMargin: 80,
+                width: 200,
+                height: 65,
+                boxMargin: 10,
+                messageMargin: 35,
+                mirrorActors: true,
+                useMaxWidth: true
+            },
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+</body>
+</html>
