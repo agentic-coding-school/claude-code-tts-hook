@@ -124,8 +124,6 @@ All configured via `"env"` in `~/.claude/settings.json` or your shell profile.
 | `CLAUDE_TTS_SUMMARIZE` | `0` | `0` = off. `1`-`8` = summarize into N sentences before speaking |
 | `CLAUDE_TTS_SUMMARY_MODEL` | `haiku` | Claude model for summarization |
 | `CLAUDE_TTS_SUMMARY_MAX_INPUT_CHARS` | `4000` | Max chars fed to the summarizer |
-| `CLAUDE_TTS_PLAY` | `1` | Set to `0` to generate audio files but skip playback |
-
 ---
 
 ## Audio Player Requirements

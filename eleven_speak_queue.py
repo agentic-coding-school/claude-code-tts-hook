@@ -43,9 +43,6 @@ ENABLED = os.getenv("CLAUDE_TTS", "1") not in ("0", "false", "False", "no", "NO"
 # Internal recursion guard (set when we call `claude -p` from inside this hook)
 INTERNAL = os.getenv("CLAUDE_TTS_INTERNAL", "") == "1"
 
-# Optional: disable playback (still generates audio)
-PLAY_ENABLED = os.getenv("CLAUDE_TTS_PLAY", "1") not in ("0", "false", "False", "no", "NO")
-
 # Playback speed (local player). 1.0 = normal, 2.0 = 2x, etc.
 try:
     PLAYBACK_SPEED = float(os.getenv("CLAUDE_TTS_SPEED", "1.0"))
@@ -247,8 +244,6 @@ def pick_player_cmd(audio_path: Path):
     return None
 
 def play_audio(audio_path: Path):
-    if not PLAY_ENABLED:
-        return
     cmd = pick_player_cmd(audio_path)
     if not cmd:
         return
