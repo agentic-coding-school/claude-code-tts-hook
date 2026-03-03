@@ -118,7 +118,7 @@ All configured via `"env"` in `~/.claude/settings.json` or your shell profile.
 | Variable | Default | Description |
 |---|---|---|
 | `CLAUDE_TTS` | `1` | Master switch. Set to `0` to disable all TTS |
-| `ELEVENLABS_MODEL_ID` | `eleven_multilingual_v2` | ElevenLabs model |
+| `ELEVENLABS_MODEL_ID` | `eleven_v3` | ElevenLabs model |
 | `ELEVENLABS_OUTPUT_FORMAT` | `mp3_44100_128` | Audio output format |
 | `ELEVENLABS_MAX_CHARS` | `900` | Max characters to speak |
 | `CLAUDE_TTS_SUMMARIZE` | `0` | `0` = off. `1`-`8` = summarize into N sentences before speaking |
